@@ -1,0 +1,259 @@
+name: shop
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-hardened: &hardened
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: *logging
+
+x-healthcheck: &healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+  start_interval: 2s
+
+x-backend-env: &backend-env
+  PG_HOST: postgres
+  PG_DB: shop
+  PG_USER: shop
+  PG_PASSWORD_FILE: /run/secrets/postgres_password
+  REDIS_HOST: redis
+  REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  AMQP_HOST: rabbitmq
+  AMQP_USER: shop
+  AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_password
+
+x-backend-deps: &backend-deps
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+services:
+  init-dirs:
+    image: redis:7.4.2-alpine
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        mkdir -p /data/postgres /data/redis /data/rabbitmq /data/tailscale
+        chown 999:999 /data/postgres
+        chmod 700 /data/postgres
+        chown 999:1000 /data/redis
+        chown 100:101 /data/rabbitmq
+        chmod 700 /data/tailscale
+        ls -ln /data
+    volumes:
+      - ${DATA_DIR:-./.data}:/data
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  postgres:
+    <<: *hardened
+    image: postgres:17.6-bookworm
+    user: "999:999"
+    environment:
+      POSTGRES_DB: shop
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - ${DATA_DIR:-./.data}/postgres:/var/lib/postgresql/data
+    shm_size: 128m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "shop", "-d", "shop"]
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPUS:-1.0}"
+          memory: ${POSTGRES_MEM:-512M}
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+
+  redis:
+    <<: *hardened
+    image: redis:7.4.2-alpine
+    user: "999:1000"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        cp /usr/local/etc/redis/redis.conf /tmp/redis.conf
+        echo "requirepass $$(cat /run/secrets/redis_password)" >> /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
+    secrets: [redis_password]
+    volumes:
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ${DATA_DIR:-./.data}/redis:/data
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping | grep -q PONG']
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPUS:-0.5}"
+          memory: ${REDIS_MEM:-192M}
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+
+  rabbitmq:
+    <<: *hardened
+    image: rabbitmq:4.1.0-management-alpine
+    hostname: rabbitmq
+    user: "100:101"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        printf 'default_user = shop\ndefault_pass = %s\n' "$$(cat /run/secrets/rabbitmq_password)" > /etc/rabbitmq/conf.d/90-auth.conf
+        exec docker-entrypoint.sh rabbitmq-server
+    secrets: [rabbitmq_password]
+    volumes:
+      - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-shop.conf:ro
+      - ${DATA_DIR:-./.data}/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      timeout: 10s
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "${RABBITMQ_CPUS:-1.0}"
+          memory: ${RABBITMQ_MEM:-512M}
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+
+  api:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    hostname: api
+    init: true
+    environment: *backend-env
+    secrets: [postgres_password, redis_password, rabbitmq_password]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPUS:-1.0}"
+          memory: ${API_MEM:-256M}
+    depends_on: *backend-deps
+
+  worker:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    hostname: worker
+    init: true
+    environment: *backend-env
+    secrets: [postgres_password, redis_password, rabbitmq_password]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/heartbeat') > 30)"]
+    deploy:
+      resources:
+        limits:
+          cpus: "${WORKER_CPUS:-0.5}"
+          memory: ${WORKER_MEM:-192M}
+    depends_on: *backend-deps
+
+  front:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: services/front/Dockerfile
+    hostname: front
+    init: true
+    environment:
+      SHOP_TITLE: ${SHOP_TITLE:-DemoTape Shop}
+      API_URL: http://gateway:8000
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4)"]
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONT_CPUS:-1.0}"
+          memory: ${FRONT_MEM:-384M}
+
+  gateway:
+    <<: *hardened
+    image: haproxy:3.0.5-alpine
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:${PUBLIC_PORT:-8080}:80"
+      - "127.0.0.1:${STATS_PORT:-8404}:8404"
+    volumes:
+      - ./infra/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8404/"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    depends_on:
+      front:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  tailscale:
+    <<: *hardened
+    image: tailscale/tailscale:v1.80.0
+    profiles: [public]
+    hostname: ${TS_HOSTNAME:-shop}
+    environment:
+      TS_HOSTNAME: ${TS_HOSTNAME:-shop}
+      TS_AUTHKEY: file:/run/secrets/ts_authkey
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    secrets: [ts_authkey]
+    volumes:
+      - ./infra/tailscale/serve.json:/config/serve.json:ro
+      - ${DATA_DIR:-./.data}/tailscale:/var/lib/tailscale
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "tailscale", "--socket", "/tmp/tailscaled.sock", "status", "--peers=false"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_healthy
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password
+  ts_authkey:
+    file: ./secrets/ts_authkey

@@ -1,0 +1,11 @@
+[project]
+name = "shop-worker"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "aio-pika==9.4.3",
+    "redis==5.2.1",
+]
+
+[tool.uv]
+exclude-newer = "2025-04-01T00:00:00Z"

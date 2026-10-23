@@ -1,0 +1,11 @@
+[project]
+name = "shop-front"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "httpx==0.28.1",
+    "nicegui==2.10.0",
+]
+
+[tool.uv]
+exclude-newer = "2025-04-01T00:00:00Z"

@@ -32,3 +32,6 @@ prune:
 
 demo2:
 	./scripts/demo2.sh
+
+smoke:
+	./scripts/smoke.sh

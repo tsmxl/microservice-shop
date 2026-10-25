@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.0"
+      - name: ruff
+        run: uvx ruff@0.9.0 check services
+      - name: shellcheck
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 --severity=warning scripts/*.sh
+      - name: hadolint
+        run: |
+          for dockerfile in services/*/Dockerfile; do
+            echo "== $dockerfile"
+            docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --failure-threshold warning - < "$dockerfile"
+          done
+
+  stack:
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: init
+        run: ./scripts/init.sh
+      - name: compose config
+        run: docker compose config -q
+      - name: build
+        run: docker compose build
+      - name: smoke test
+        run: ./scripts/smoke.sh
+      - name: down
+        if: always()
+        run: docker compose --profile public down

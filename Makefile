@@ -30,6 +30,9 @@ public:
 prune:
 	docker builder prune -f
 
+psql:
+	docker compose exec postgres psql -U shop -d shop
+
 demo2:
 	./scripts/demo2.sh
 

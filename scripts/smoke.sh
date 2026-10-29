@@ -46,6 +46,7 @@ echo "== requests through gateway"
 expect "$base/api/hello" '"instance"'
 expect "$base/api/health" '"status":"ok"'
 expect "$base/api/hello" '"seconds_ago"'
+expect "$base/api/products" '"title"'
 expect "$base/" '<title>'
 
 echo "== smoke test passed"

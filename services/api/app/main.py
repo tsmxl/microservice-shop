@@ -1,25 +1,24 @@
 import asyncio
 import logging
 import os
-import socket
 import time
 from contextlib import asynccontextmanager
 
-import aio_pika
+import psycopg
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from psycopg.conninfo import make_conninfo
-from psycopg_pool import AsyncConnectionPool
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from redis.asyncio import Redis
+
+from app import admin, catalog, orders
+from app.cache import Cache
+from app.config import INSTANCE, secret
+from app.events import Events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("api")
-
-INSTANCE = socket.gethostname()
-
-
-def secret(name: str) -> str:
-    with open(os.environ[f"{name}_FILE"], encoding="utf-8") as f:
-        return f.read().strip()
 
 
 def pg_conninfo() -> str:
@@ -37,25 +36,16 @@ def pg_conninfo() -> str:
     )
 
 
-async def connect_amqp(app: FastAPI) -> None:
-    while True:
-        try:
-            app.state.amqp = await aio_pika.connect_robust(
-                host=os.environ["AMQP_HOST"],
-                login=os.environ["AMQP_USER"],
-                password=secret("AMQP_PASSWORD"),
-                timeout=5,
-            )
-            log.info("connected to rabbitmq")
-            return
-        except Exception as exc:
-            log.warning("rabbitmq unavailable: %s", exc)
-            await asyncio.sleep(2)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.pg = AsyncConnectionPool(pg_conninfo(), min_size=1, max_size=10, timeout=3, open=False)
+    app.state.pg = AsyncConnectionPool(
+        pg_conninfo(),
+        min_size=1,
+        max_size=10,
+        timeout=3,
+        kwargs={"row_factory": dict_row},
+        open=False,
+    )
     await app.state.pg.open(wait=False)
     app.state.redis = Redis(
         host=os.environ["REDIS_HOST"],
@@ -64,18 +54,37 @@ async def lifespan(app: FastAPI):
         socket_timeout=1,
         socket_connect_timeout=1,
     )
-    app.state.amqp = None
-    amqp_task = asyncio.create_task(connect_amqp(app))
+    app.state.cache = Cache(app.state.redis)
+    app.state.events = Events()
+    app.state.admin_password = secret("ADMIN_PASSWORD")
+    app.state.admin_token = secret("ADMIN_TOKEN")
+    connect_task = asyncio.create_task(app.state.events.connect())
     log.info("api %s started", INSTANCE)
     yield
-    amqp_task.cancel()
-    if app.state.amqp is not None:
-        await app.state.amqp.close()
+    connect_task.cancel()
+    await app.state.events.close()
     await app.state.redis.aclose()
     await app.state.pg.close()
 
 
 app = FastAPI(title="shop-api", lifespan=lifespan)
+app.include_router(catalog.router)
+app.include_router(orders.router)
+app.include_router(admin.router)
+
+
+@app.middleware("http")
+async def instance_header(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Instance"] = INSTANCE
+    return response
+
+
+@app.exception_handler(PoolTimeout)
+@app.exception_handler(psycopg.OperationalError)
+async def database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    log.warning("database unavailable on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse({"detail": "База данных недоступна"}, status_code=503)
 
 
 async def probe(check) -> str:
@@ -96,7 +105,7 @@ async def check_redis(request: Request) -> None:
 
 
 async def check_rabbitmq(request: Request) -> None:
-    connection = request.app.state.amqp
+    connection = request.app.state.events.connection
     if connection is None:
         raise ConnectionError("not connected yet")
     channel = await connection.channel()

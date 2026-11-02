@@ -27,5 +27,5 @@ docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_pass
 echo "== rabbitmq"
 docker compose exec -T rabbitmq rabbitmq-diagnostics -q server_version
 
-echo "== worker heartbeat"
+echo "== worker logs"
 docker compose logs --no-color --tail 3 worker

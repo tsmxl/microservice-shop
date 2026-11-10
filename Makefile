@@ -36,5 +36,8 @@ psql:
 demo2:
 	./scripts/demo2.sh
 
+demo3:
+	./scripts/demo3.sh
+
 smoke:
 	./scripts/smoke.sh

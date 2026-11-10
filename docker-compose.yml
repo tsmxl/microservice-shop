@@ -212,7 +212,10 @@ services:
     init: true
     environment:
       SHOP_TITLE: ${SHOP_TITLE:-DemoTape Shop}
+      SHOP_TZ: ${SHOP_TZ:-Europe/Moscow}
       API_URL: http://gateway:8000
+      STORAGE_SECRET_FILE: /run/secrets/storage_secret
+    secrets: [storage_secret]
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4)"]
@@ -286,5 +289,7 @@ secrets:
     file: ./secrets/admin_password
   admin_token:
     file: ./secrets/admin_token
+  storage_secret:
+    file: ./secrets/storage_secret
   ts_authkey:
     file: ./secrets/ts_authkey

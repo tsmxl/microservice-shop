@@ -6,6 +6,9 @@ cd "$(dirname "$0")/.."
 echo "== compose ps"
 docker compose ps -a --format 'table {{.Service}}\t{{.State}}\t{{.Health}}\t{{.Status}}\t{{.Ports}}'
 
+echo "== firewall: last blocked packets"
+docker compose exec -T firewall fw log 10 || echo "firewall is not running"
+
 echo "== not healthy"
 bad="$(docker compose ps -a --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}' \
   | awk -F'|' '!(($2 == "running" && ($3 == "healthy" || $3 == "")) || ($2 == "exited" && $4 == "0")) {print $1}')"

@@ -1,4 +1,5 @@
 S ?= api
+R ?= api-pg
 
 init:
 	./scripts/init.sh
@@ -38,6 +39,21 @@ demo2:
 
 demo3:
 	./scripts/demo3.sh
+
+fw-show:
+	docker compose exec firewall fw show
+
+fw-test:
+	./scripts/fw-test.sh
+
+fw-break:
+	docker compose exec firewall fw break $(R)
+
+fw-restore:
+	docker compose exec firewall fw restore
+
+fw-log:
+	docker compose exec firewall fw log
 
 smoke:
 	./scripts/smoke.sh

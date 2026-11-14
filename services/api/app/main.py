@@ -87,16 +87,19 @@ async def database_unavailable(request: Request, exc: Exception) -> JSONResponse
     return JSONResponse({"detail": "База данных недоступна"}, status_code=503)
 
 
+PROBE_SECONDS = 2
+
+
 async def probe(check) -> str:
     try:
-        await asyncio.wait_for(check(), timeout=3)
+        await asyncio.wait_for(check(), timeout=PROBE_SECONDS)
         return "ok"
     except Exception as exc:
         return f"error: {type(exc).__name__}"
 
 
 async def check_postgres(request: Request) -> None:
-    async with request.app.state.pg.connection(timeout=2) as conn:
+    async with request.app.state.pg.connection(timeout=PROBE_SECONDS) as conn:
         await conn.execute("SELECT 1")
 
 
@@ -128,16 +131,23 @@ async def hello(request: Request) -> dict:
         workers = await alive_workers(request.app.state.redis)
     except Exception as exc:
         log.warning("cannot read worker heartbeats: %s", exc)
-        workers = []
+        workers = None
     return {"message": "Привет от api!", "instance": INSTANCE, "workers": workers}
+
+
+@app.get("/live")
+async def live() -> dict:
+    return {"status": "ok", "instance": INSTANCE}
 
 
 @app.get("/health")
 async def health(request: Request) -> dict:
-    checks = {
-        "postgres": await probe(lambda: check_postgres(request)),
-        "redis": await probe(lambda: check_redis(request)),
-        "rabbitmq": await probe(lambda: check_rabbitmq(request)),
-    }
+    names = ("postgres", "redis", "rabbitmq")
+    results = await asyncio.gather(
+        probe(lambda: check_postgres(request)),
+        probe(lambda: check_redis(request)),
+        probe(lambda: check_rabbitmq(request)),
+    )
+    checks = dict(zip(names, results, strict=True))
     status = "ok" if all(state == "ok" for state in checks.values()) else "degraded"
     return {"status": status, "instance": INSTANCE, "checks": checks}

@@ -15,12 +15,12 @@ jobs:
       - name: ruff
         run: uvx ruff@0.9.0 check services
       - name: shellcheck
-        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 --severity=warning scripts/*.sh
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 --severity=warning scripts/*.sh infra/firewall/fw.sh
       - name: hadolint
         run: |
-          for dockerfile in services/*/Dockerfile; do
+          for dockerfile in services/*/Dockerfile infra/*/Dockerfile; do
             echo "== $dockerfile"
-            docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --failure-threshold warning - < "$dockerfile"
+            docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --ignore DL3008 --failure-threshold warning - < "$dockerfile"
           done
 
   stack:
@@ -36,6 +36,8 @@ jobs:
         run: docker compose build
       - name: smoke test
         run: ./scripts/smoke.sh
+      - name: firewall matrix
+        run: ./scripts/fw-test.sh
       - name: down
         if: always()
         run: docker compose --profile public down

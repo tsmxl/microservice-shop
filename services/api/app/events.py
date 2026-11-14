@@ -13,6 +13,7 @@ from app.config import INSTANCE, secret
 log = logging.getLogger("api.events")
 
 EXCHANGE = "shop.events"
+PUBLISH_SECONDS = 3
 
 
 class Events:
@@ -59,7 +60,7 @@ class Events:
             type=event,
             app_id=envelope["source"],
         )
-        await self.exchange.publish(message, routing_key=event, timeout=5)
+        await self.exchange.publish(message, routing_key=event, timeout=PUBLISH_SECONDS)
 
     async def close(self) -> None:
         if self.connection is not None:

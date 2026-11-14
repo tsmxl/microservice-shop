@@ -33,7 +33,10 @@ def render(hello: dict | None, health: dict | None) -> None:
     with ui.card().props("flat bordered").classes("w-full"):
         ui.label("Фоновые обработчики").classes("text-h6")
         workers = (hello or {}).get("workers", [])
-        if not workers:
+        if workers is None:
+            ui.label("Нет данных: api не может прочитать сигналы worker из Redis").classes("text-negative")
+            workers = []
+        elif not workers:
             ui.label("Нет сигналов от worker за последние 30 секунд").classes("text-negative")
         for worker in workers:
             status_row(f"worker {worker['instance']}", "ok")

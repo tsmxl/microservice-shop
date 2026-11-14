@@ -77,6 +77,20 @@ docker info --format 'driver={{.Driver}} cgroup={{.CgroupVersion}} security={{js
   || echo "docker info failed: check that the docker service runs and the user is in the docker group"
 df -h "$(env_get DATA_DIR)" | tail -n 1
 ip route | grep -E '(^|[^0-9])10\.10\.' || echo "routes 10.10.x.x: none"
+networks="$(docker network ls -q 2>/dev/null \
+  | xargs -r docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || true)"
+overlap="$(grep -E ' 10\.10\.' <<< "$networks" | grep -v '^shop_' || true)"
+if [[ -n "$overlap" ]]; then
+  echo "docker networks in 10.10.x.x outside this project, they conflict with the IP plan:"
+  echo "$overlap"
+else
+  echo "docker networks in 10.10.x.x: only shop_*"
+fi
+if [[ -r /proc/sys/net/bridge/bridge-nf-call-iptables ]]; then
+  echo "bridge-nf-call-iptables: $(cat /proc/sys/net/bridge/bridge-nf-call-iptables)"
+else
+  echo "bridge-nf-call-iptables: br_netfilter is not loaded yet, the firewall service loads it"
+fi
 
 echo "== done"
 echo "admin password: secrets/admin_password"
